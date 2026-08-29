@@ -1,0 +1,38 @@
+{
+  "name": "pi-ordered-fallback",
+  "version": "0.1.0",
+  "description": "Pi extension with ordered model fallbacks and session, directory, and global scopes.",
+  "author": "dev-willbird1936",
+  "license": "MIT",
+  "keywords": ["pi-package", "pi-extension", "fallback", "models"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dev-willbird1936/pi-fallback.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dev-willbird1936/pi-fallback/issues"
+  },
+  "homepage": "https://github.com/dev-willbird1936/pi-fallback#readme",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": ["src", "README.md", "LICENSE", "setup.bat", "launch.bat", "settings.bat", "tools"],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "check": "npm run typecheck && npm test && node src/extension.ts --selfcheck"
+  },
+  "pi": {
+    "extensions": ["./src/extension.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.0"
+  }
+}
