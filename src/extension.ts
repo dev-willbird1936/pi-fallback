@@ -62,18 +62,29 @@ interface PendingFailure {
 }
 
 const TRANSIENT_ERROR =
-  /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
+  /overloaded|provider.?returned.?error|rate.?limit|too many requests|\b(?:429|500|502|503|504)\b|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
 const QUOTA_ERROR =
-  /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing/i;
+  /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|usage[ _-]?limit|available balance|credit balance|insufficient(?:_| )quota|insufficient(?:_| )balance|out of budget|(?:current|remaining) quota|quota exceeded|plan limit|no more (?:fast )?requests|billing/i;
 const UNAVAILABLE_ERROR =
-  /404|not_found_error|not[ _]found|is not available|model.?not.?available|does not exist|no such model|unsupported model|invalid model/i;
+  /\b404\b|not_found_error|not[ _]found|is not available|model.?not.?available|does not exist|no such model|unsupported model|invalid model/i;
+const CONTEXT_OVERFLOW_ERROR =
+  /\b(?:context(?: window| length)?|prompt)\b.{0,80}\b(?:overflow|too (?:long|many tokens)|maximum|limit|exceed(?:ed)?)\b|\b(?:too many tokens|maximum context)\b/i;
 
 export function classifyError(errorMessage: string | undefined): ErrorBucket {
   if (!errorMessage) return "ignore";
+  if (CONTEXT_OVERFLOW_ERROR.test(errorMessage)) return "ignore";
   if (QUOTA_ERROR.test(errorMessage)) return "quota";
   if (UNAVAILABLE_ERROR.test(errorMessage)) return "unavailable";
   if (TRANSIENT_ERROR.test(errorMessage)) return "transient";
   return "ignore";
+}
+
+function isCancellationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    (error instanceof Error && error.name === "AbortError") ||
+    /\b(?:abort(?:ed|ing)?|cancel(?:led|ed|lation)?)\b/i.test(message)
+  );
 }
 
 function cloneSettings(settings: FallbackSettings): FallbackSettings {
@@ -617,7 +628,7 @@ class FallbackEditor implements Component {
   }
 
   private moveFallback(direction: -1 | 1): void {
-    if (this.selectedRow <= 1) return;
+    if (this.selectedRow <= 0) return;
     const visibleChain = scopeChain(this.settings, this.scope);
     const index = this.selectedRow - 1;
     const target = index + direction;
@@ -721,6 +732,7 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
   let fallbackTarget: ModelRef | undefined;
   let restoringBaseline = false;
   let pendingFailure: PendingFailure | undefined;
+  let continuationAfterFailure = false;
   let lastUserContent: UserContent | undefined;
 
   function currentSettings(): FallbackSettings {
@@ -755,6 +767,7 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
     fallbackExhausted = false;
     fallbackTarget = undefined;
     pendingFailure = undefined;
+    continuationAfterFailure = false;
     updateStatus(ctx);
   }
 
@@ -892,13 +905,19 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
 
   pi.on("message_end", async (event) => {
     if (event.message.role === "user") {
+      // Goal/continuation extensions can append a user message after a failed run
+      // but before agent_settled. Keep the original failure pending for fallback.
+      if (pendingFailure) continuationAfterFailure = true;
       lastUserContent = event.message.content;
-      pendingFailure = undefined;
     } else if (
       event.message.role === "assistant" &&
-      event.message.stopReason !== "error"
+      event.message.stopReason !== "error" &&
+      (!pendingFailure || !continuationAfterFailure)
     ) {
+      // A successful assistant message with no intervening user message is Pi's
+      // built-in retry succeeding; a continuation message means goal flow.
       pendingFailure = undefined;
+      continuationAfterFailure = false;
     }
   });
 
@@ -940,11 +959,13 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
       failed: modelRef(ctx.model) ?? `${last.provider}/${last.model}`,
       userContent: lastUserContent,
     };
+    continuationAfterFailure = false;
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
     const failure = pendingFailure;
     pendingFailure = undefined;
+    continuationAfterFailure = false;
     if (!failure || !ctx.model) return;
     await tryFallback(ctx, failure);
   });
@@ -1053,6 +1074,10 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
       customInstructions: `Preserve details needed to continue after fallback to ${targetRef}.`,
       onComplete: () => retryLastUserMessage(ctx, content),
       onError: (error) => {
+        if (isCancellationError(error)) {
+          ctx.ui.notify(`[${EXTENSION_NAME}] compaction cancelled; retry stopped.`, "info");
+          return;
+        }
         ctx.ui.notify(
           `[${EXTENSION_NAME}] compaction failed: ${error.message}; retrying anyway.`,
           "warning",

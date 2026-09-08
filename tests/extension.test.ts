@@ -23,7 +23,18 @@ mock.module("@earendil-works/pi-tui", () => ({
   visibleWidth: (text: string) => text.length,
 }));
 
-const { default: piFallbackExtension } = await import("../src/extension.ts");
+const { default: piFallbackExtension, classifyError } = await import("../src/extension.ts");
+
+test("classifies provider quota messages", () => {
+  expect(classifyError("You have hit your ChatGPT usage limit (Plus plan).")).toBe("quota");
+  expect(classifyError("You exceeded your current quota; check your plan and billing details.")).toBe("quota");
+  expect(classifyError("Your credit balance is too low to continue.")).toBe("quota");
+});
+
+test("does not classify context overflow token counts as transient", () => {
+  expect(classifyError("prompt is too long: 250000 tokens > 200000 maximum")).toBe("ignore");
+  expect(classifyError("HTTP 500 provider error")).toBe("transient");
+});
 
 test("tries configured fallbacks in exact order across repeated failures", async () => {
   const modelA = {
@@ -106,6 +117,7 @@ test("tries configured fallbacks in exact order across repeated failures", async
 
   const failed = (model: any) => ({
     type: "agent_end",
+    willRetry: false,
     messages: [
       {
         role: "assistant",
@@ -161,4 +173,27 @@ test("tries configured fallbacks in exact order across repeated failures", async
   );
   await handlers.get("agent_settled")?.({ type: "agent_settled" }, ctx);
   expect(retries).toHaveLength(2);
+
+  // A goal/continuation can append a user message and successful assistant turn
+  // before the failed run reaches agent_settled. That must not erase fallback state.
+  await handlers.get("session_start")?.(
+    { type: "session_start", reason: "reload" },
+    ctx,
+  );
+  await handlers.get("message_end")?.(
+    { message: { role: "user", content: "goal work", timestamp: 4 } },
+    ctx,
+  );
+  await handlers.get("agent_end")?.(failed(modelC), ctx);
+  await handlers.get("message_end")?.(
+    { message: { role: "user", content: "goal continuation", timestamp: 5 } },
+    ctx,
+  );
+  await handlers.get("message_end")?.(
+    { message: { role: "assistant", stopReason: "stop", content: [], timestamp: 6 } },
+    ctx,
+  );
+  await handlers.get("agent_settled")?.({ type: "agent_settled" }, ctx);
+  expect(retries).toHaveLength(3);
+  expect(retries[2]?.content).toBe("goal work");
 });

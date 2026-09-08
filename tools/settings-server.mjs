@@ -5,9 +5,10 @@ import { homedir } from "node:os";
 
 const port = 47653;
 const cwd = resolve(process.argv[2] || process.cwd());
+const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
 const paths = {
   directory: join(cwd, ".pi", "pi-fallback.json"),
-  global: join(homedir(), ".pi", "agent", "extensions", "pi-fallback.json"),
+  global: join(agentDir, "extensions", "pi-fallback.json"),
 };
 
 function normalize(values) {
