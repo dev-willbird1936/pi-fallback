@@ -1,5 +1,9 @@
 node_modules/
 package-lock.json
 .pi/
+.serena/
+logs/
 *.log
 .tmp-*
+.env
+.env.*

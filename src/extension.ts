@@ -23,7 +23,10 @@ import {
   type Component,
   type SelectItem,
 } from "@earendil-works/pi-tui";
+import * as piTuiNamespace from "@earendil-works/pi-tui";
 import {
+  fuzzyFilterModels,
+  modelSearchText,
   normalizeChain,
   normalizeModelRef,
   resolveEffectiveFallbacks,
@@ -40,6 +43,13 @@ const SESSION_ENTRY = "pi-fallback-settings";
 const CONFIG_FILE = "pi-fallback.json";
 const MAX_FALLBACKS = 50;
 const MAX_VISIBLE_ROWS = 12;
+
+export const RETRY_TOLERANCE = 3;
+
+const SWITCH_REQUEST_CHANNEL = "pi-switch:request";
+const SWITCHED_CHANNEL = "pi-switch:switched";
+const SWITCH_FAILED_CHANNEL = "pi-switch:failed";
+const SWITCH_BUS_TIMEOUT_MS = 8000;
 
 interface DiskConfig {
   version?: number;
@@ -59,6 +69,7 @@ interface PendingFailure {
   bucket: Exclude<ErrorBucket, "ignore">;
   failed: ModelRef;
   userContent: UserContent;
+  willRetry: boolean;
 }
 
 const TRANSIENT_ERROR =
@@ -100,7 +111,7 @@ function readConfigFile(path: string): ModelRef[] | undefined {
 
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as DiskConfig;
-    return normalizeChain(parsed?.fallbacks);
+    return normalizeChain(parsed?.fallbacks).slice(0, MAX_FALLBACKS);
   } catch (error) {
     console.error(`[${EXTENSION_NAME}] invalid config at ${path}:`, error);
     // A present but broken file is treated as an explicit empty chain rather than
@@ -161,6 +172,7 @@ function displayModelRef(ctx: ExtensionContext, ref: ModelRef): string {
 }
 
 function selectableModels(ctx: ExtensionContext): Model<any>[] {
+  // Prefer Pi's project-scoped list when the host provides one, matching /model.
   const models =
     ctx.scopedModels.length > 0
       ? ctx.scopedModels.map((entry) => entry.model)
@@ -168,10 +180,30 @@ function selectableModels(ctx: ExtensionContext): Model<any>[] {
   const unique = new Map<string, Model<any>>();
   for (const model of models)
     unique.set(`${model.provider}/${model.id}`, model);
-  return [...unique.values()].sort((a, b) => {
-    const provider = a.provider.localeCompare(b.provider);
-    return provider || a.id.localeCompare(b.id);
-  });
+  return [...unique.values()];
+}
+
+// The host Pi's fuzzy matcher when it exports one, otherwise the vendored
+// mirror in logic.ts (same /model semantics either way).
+const hostFuzzyFilter =
+  (
+    piTuiNamespace as unknown as {
+      fuzzyFilter?: <T>(
+        items: T[],
+        query: string,
+        getText: (item: T) => string,
+      ) => T[];
+    }
+  ).fuzzyFilter ?? null;
+
+function filterPickerModels<T>(
+  items: T[],
+  query: string,
+  getText: (item: T) => string,
+): T[] {
+  if (!query.trim()) return items;
+  if (hostFuzzyFilter) return hostFuzzyFilter(items, query, getText);
+  return fuzzyFilterModels(items, query, getText);
 }
 
 function sourceLabel(source: Scope | "none"): string {
@@ -216,11 +248,14 @@ function statusText(
   chain: ModelRef[],
   activeIndex: number | undefined,
   exhausted: boolean,
+  failures: number,
 ): string | undefined {
   if (chain.length === 0) return undefined;
   if (exhausted) return `fallbacks exhausted (${chain.length})`;
-  if (activeIndex === undefined)
-    return `${chain.length} fallback${chain.length === 1 ? "" : "s"} ready`;
+  if (activeIndex === undefined) {
+    const ready = `${chain.length} fallback${chain.length === 1 ? "" : "s"} ready`;
+    return failures > 0 ? `${ready} · retry ${failures}/${RETRY_TOLERANCE}` : ready;
+  }
   return `fallback ${activeIndex + 1}/${chain.length}`;
 }
 
@@ -229,7 +264,10 @@ class ModelPicker implements Component {
   private readonly theme: any;
   private readonly done: (ref: string | undefined) => void;
   private readonly search = new Input();
-  private readonly list: SelectList;
+  private readonly models: Model<any>[];
+  private readonly selectedRef: ModelRef | undefined;
+  private readonly maxVisible: number;
+  private list: SelectList;
   private searchFocused = true;
   private _focused = false;
 
@@ -243,28 +281,57 @@ class ModelPicker implements Component {
     this.tui = tui;
     this.theme = theme;
     this.done = done;
-    const items: SelectItem[] = models.map((model) => {
-      const ref = modelRef(model)!;
-      return {
-        value: ref,
-        label: ref,
-        description:
-          model.name && model.name !== model.id ? model.name : undefined,
-      };
-    });
-    this.list = new SelectList(items, Math.min(12, Math.max(1, items.length)), {
-      selectedPrefix: (text) => theme.fg("accent", text),
-      selectedText: (text) => theme.fg("accent", text),
-      description: (text) => theme.fg("muted", text),
-      scrollInfo: (text) => theme.fg("dim", text),
-      noMatch: (text) => theme.fg("warning", text),
-    });
-    const selectedIndex = items.findIndex((item) => item.value === selectedRef);
-    if (selectedIndex >= 0) this.list.setSelectedIndex(selectedIndex);
+    this.models = models;
+    this.selectedRef = selectedRef;
+    this.maxVisible = Math.min(12, Math.max(1, models.length));
+    this.list = this.buildList("");
     this.search.onSubmit = () => this.selectCurrent();
-    this.list.onSelect = (item) => done(item.value);
-    this.list.onCancel = () => done(undefined);
     this.syncFocus();
+  }
+
+  private toItem(model: Model<any>): SelectItem {
+    const ref = modelRef(model)!;
+    return {
+      value: ref,
+      label: ref,
+      description:
+        model.name && model.name !== model.id ? model.name : undefined,
+    };
+  }
+
+  private buildList(query: string): SelectList {
+    const visible = filterPickerModels(
+      this.models,
+      query,
+      (model) =>
+        modelSearchText({
+          provider: model.provider,
+          id: model.id,
+          name: model.name,
+        }),
+    );
+    const list = new SelectList(
+      visible.map((model) => this.toItem(model)),
+      Math.min(this.maxVisible, Math.max(1, visible.length)),
+      {
+        selectedPrefix: (text) => this.theme.fg("accent", text),
+        selectedText: (text) => this.theme.fg("accent", text),
+        description: (text) => this.theme.fg("muted", text),
+        scrollInfo: (text) => this.theme.fg("dim", text),
+        noMatch: (text) => this.theme.fg("warning", text),
+      },
+    );
+    const selectedIndex = visible.findIndex(
+      (model) => modelRef(model) === this.selectedRef,
+    );
+    list.setSelectedIndex(selectedIndex >= 0 ? selectedIndex : 0);
+    list.onSelect = (item) => this.done(item.value);
+    list.onCancel = () => this.done(undefined);
+    return list;
+  }
+
+  private refreshFilter(): void {
+    this.list = this.buildList(this.search.getValue());
   }
 
   get focused(): boolean {
@@ -302,7 +369,7 @@ class ModelPicker implements Component {
         return;
       } else {
         this.search.handleInput(data);
-        this.list.setFilter(this.search.getValue());
+        this.refreshFilter();
       }
     } else {
       this.list.handleInput(data);
@@ -734,6 +801,13 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
   let pendingFailure: PendingFailure | undefined;
   let continuationAfterFailure = false;
   let lastUserContent: UserContent | undefined;
+  let consecutiveFailures = 0;
+  let consecutiveFailedRef: ModelRef | undefined;
+  const switchWaiters: {
+    ref: ModelRef;
+    resolve: (ok: boolean, error?: string) => void;
+  }[] = [];
+  let switchListenersAttached = false;
 
   function currentSettings(): FallbackSettings {
     return {
@@ -750,7 +824,12 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
   function updateStatus(ctx: ExtensionContext): void {
     ctx.ui.setStatus(
       "pi-fallback",
-      statusText(effectiveChain(), activeFallbackIndex, fallbackExhausted),
+      statusText(
+        effectiveChain(),
+        activeFallbackIndex,
+        fallbackExhausted,
+        consecutiveFailures,
+      ),
     );
   }
 
@@ -768,6 +847,8 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
     fallbackTarget = undefined;
     pendingFailure = undefined;
     continuationAfterFailure = false;
+    consecutiveFailures = 0;
+    consecutiveFailedRef = undefined;
     updateStatus(ctx);
   }
 
@@ -903,7 +984,7 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("message_end", async (event) => {
+  pi.on("message_end", async (event, ctx) => {
     if (event.message.role === "user") {
       // Goal/continuation extensions can append a user message after a failed run
       // but before agent_settled. Keep the original failure pending for fallback.
@@ -912,12 +993,16 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
     } else if (
       event.message.role === "assistant" &&
       event.message.stopReason !== "error" &&
-      (!pendingFailure || !continuationAfterFailure)
+      event.message.stopReason !== "aborted"
     ) {
-      // A successful assistant message with no intervening user message is Pi's
-      // built-in retry succeeding; a continuation message means goal flow.
+      // Any successful assistant message — Pi's built-in retry succeeding or a
+      // goal continuation recovering on its own — clears failure state, so a
+      // hiccup the goal works through never triggers a fallback.
       pendingFailure = undefined;
       continuationAfterFailure = false;
+      consecutiveFailures = 0;
+      consecutiveFailedRef = undefined;
+      updateStatus(ctx);
     }
   });
 
@@ -947,28 +1032,189 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
       .find(
         (message): message is AssistantMessage => message.role === "assistant",
       );
-    if (!last || last.stopReason !== "error") return;
+    if (!last || !ctx.model) return;
+    const failedRef = modelRef(ctx.model) ?? `${last.provider}/${last.model}`;
 
-    const bucket = classifyError(last.errorMessage);
-    if (bucket === "ignore" || lastUserContent === undefined || !ctx.model) {
+    // A non-error abort with a cancel-like (or empty) message is the user
+    // stopping the run: fresh intent, drop failure state instead of counting it.
+    const abortedFailure =
+      last.stopReason === "aborted" &&
+      !!last.errorMessage &&
+      !isCancellationError(last.errorMessage);
+    if (last.stopReason !== "error" && !abortedFailure) {
+      if (last.stopReason === "aborted") {
+        pendingFailure = undefined;
+        continuationAfterFailure = false;
+        consecutiveFailures = 0;
+        consecutiveFailedRef = undefined;
+        updateStatus(ctx);
+      }
       return;
     }
 
+    const bucket = classifyError(last.errorMessage);
+    if (bucket === "ignore" || lastUserContent === undefined) {
+      return;
+    }
+
+    consecutiveFailures = sameRef(consecutiveFailedRef, failedRef)
+      ? consecutiveFailures + 1
+      : 1;
+    consecutiveFailedRef = failedRef;
     pendingFailure = {
       bucket,
-      failed: modelRef(ctx.model) ?? `${last.provider}/${last.model}`,
+      failed: failedRef,
       userContent: lastUserContent,
+      willRetry:
+        (event as unknown as { willRetry?: boolean }).willRetry === true,
     };
     continuationAfterFailure = false;
+    updateStatus(ctx);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
     const failure = pendingFailure;
+    if (!failure || !ctx.model) {
+      pendingFailure = undefined;
+      continuationAfterFailure = false;
+      return;
+    }
+    // Pi's built-in retry or a goal continuation is about to retry the same
+    // model. Hold the fallback until RETRY_TOLERANCE consecutive failures so
+    // recoverable hiccups never yank the model; a stuck model that keeps
+    // failing still falls back once tolerance is reached.
+    if (
+      (failure.willRetry || continuationAfterFailure) &&
+      consecutiveFailures < RETRY_TOLERANCE
+    ) {
+      continuationAfterFailure = false;
+      updateStatus(ctx);
+      return;
+    }
     pendingFailure = undefined;
     continuationAfterFailure = false;
-    if (!failure || !ctx.model) return;
     await tryFallback(ctx, failure);
   });
+
+  function piSwitchAvailable(): boolean {
+    try {
+      if (typeof pi.events?.on !== "function" || typeof pi.events?.emit !== "function")
+        return false;
+      return (pi.getCommands() ?? []).some(
+        (command) => command.name === "switch",
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  function ensureSwitchListeners(): void {
+    if (switchListenersAttached) return;
+    if (typeof pi.events?.on !== "function") {
+      throw new Error("pi.events is unavailable");
+    }
+    pi.events.on(SWITCHED_CHANNEL, (data: unknown) => {
+      const to = (data as { to?: unknown } | null)?.to;
+      if (typeof to !== "string") return;
+      const index = switchWaiters.findIndex((waiter) => waiter.ref === to);
+      if (index >= 0) switchWaiters.splice(index, 1)[0]?.resolve(true);
+    });
+    pi.events.on(SWITCH_FAILED_CHANNEL, (data: unknown) => {
+      const payload =
+        (data as { model?: unknown; error?: unknown } | null) ?? {};
+      if (typeof payload.model !== "string") return;
+      const index = switchWaiters.findIndex(
+        (waiter) => waiter.ref === payload.model,
+      );
+      if (index >= 0)
+        switchWaiters.splice(index, 1)[0]?.resolve(
+          false,
+          typeof payload.error === "string" ? payload.error : "unknown error",
+        );
+    });
+    switchListenersAttached = true;
+  }
+
+  function requestSwitchViaBus(
+    candidateRef: ModelRef,
+    reason: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      ensureSwitchListeners();
+    } catch (error) {
+      return Promise.resolve({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return new Promise((resolve) => {
+      const waiter: (typeof switchWaiters)[number] = {
+        ref: candidateRef,
+        resolve: (ok: boolean, error?: string) => {
+          clearTimeout(timer);
+          resolve({ ok, error });
+        },
+      };
+      const timer = setTimeout(() => {
+        const index = switchWaiters.indexOf(waiter);
+        if (index >= 0) switchWaiters.splice(index, 1);
+        resolve({ ok: false, error: "timed out waiting for pi-switch" });
+      }, SWITCH_BUS_TIMEOUT_MS);
+      (timer as unknown as { unref?: () => void }).unref?.();
+      switchWaiters.push(waiter);
+      try {
+        pi.events.emit(SWITCH_REQUEST_CHANNEL, {
+          model: candidateRef,
+          mode: "deferred",
+          reason,
+          compact: false,
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        const index = switchWaiters.indexOf(waiter);
+        if (index >= 0) switchWaiters.splice(index, 1);
+        resolve({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+  }
+
+  async function activateModel(
+    ctx: ExtensionContext,
+    candidate: Model<any>,
+    candidateRef: ModelRef,
+    failure: PendingFailure,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const alreadyOnCandidate =
+      `${ctx.model.provider}/${ctx.model.id}` === candidateRef;
+    if (alreadyOnCandidate) return { ok: true };
+    // Prefer pi-switch when it is installed so the switch goes through the
+    // same path as /switch. Always confirm with setModel so a premature
+    // switched event cannot leave the failed model active.
+    if (piSwitchAvailable()) {
+      const via = await requestSwitchViaBus(
+        candidateRef,
+        `pi-fallback: ${failure.failed} failed (${failure.bucket})`,
+      );
+      if (`${ctx.model.provider}/${ctx.model.id}` === candidateRef) return { ok: true };
+      if (!via.ok) {
+        ctx.ui.notify(
+          `[${EXTENSION_NAME}] pi-switch could not activate ${candidateRef} (${via.error ?? "unknown error"}); switching directly.`,
+          "warning",
+        );
+      }
+    }
+    try {
+      return { ok: await pi.setModel(candidate) };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
 
   async function tryFallback(
     ctx: ExtensionContext,
@@ -997,18 +1243,15 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
       }
 
       fallbackTarget = candidateRef;
-      let ok = false;
-      let activationError: unknown;
-      try {
-        ok = await pi.setModel(candidate);
-      } catch (error) {
-        activationError = error;
-      }
-      if (!ok) {
+      const activation = await activateModel(
+        ctx,
+        candidate,
+        candidateRef,
+        failure,
+      );
+      if (!activation.ok) {
         fallbackTarget = undefined;
-        const detail = activationError
-          ? `: ${activationError instanceof Error ? activationError.message : String(activationError)}`
-          : "";
+        const detail = activation.error ? `: ${activation.error}` : "";
         ctx.ui.notify(
           `[${EXTENSION_NAME}] skipping unavailable model ${candidateRef}${detail}.`,
           "warning",
@@ -1109,6 +1352,8 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
         `Current dir: ${settings.directory === undefined ? "inherits" : settings.directory.join(" → ") || "disabled"}`,
         `Global: ${settings.global === undefined ? "not configured" : settings.global.join(" → ") || "disabled"}`,
         `Effective (${sourceLabel(effective.source)}): ${effective.fallbacks.join(" → ") || "none"}`,
+        `Consecutive failures: ${consecutiveFailures}/${RETRY_TOLERANCE}`,
+        `Switch method: ${piSwitchAvailable() ? "pi-switch bus (direct setModel fallback)" : "direct setModel (pi-switch not detected)"}`,
       ];
       ctx.ui.notify(lines.join("\n"), "info");
     },

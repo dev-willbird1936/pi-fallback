@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 
 const port = 47653;
 const cwd = resolve(process.argv[2] || process.cwd());
+const cwdAttr = JSON.stringify(cwd).replace(/</g, "\\u003c");
 const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
 const paths = {
   directory: join(cwd, ".pi", "pi-fallback.json"),
@@ -73,7 +74,7 @@ const page = `<!doctype html>
   code { color: #b9d6ff; }
 </style>
 </head>
-<body>
+<body data-cwd=${cwdAttr}>
 <h1>Pi ordered fallback settings</h1>
 <p>One model reference per line. Pi tries them from top to bottom. The interactive <code>/fallback</code> command is the model picker.</p>
 <div class="tabs">
@@ -98,7 +99,7 @@ function render() {
   textarea.disabled = session;
   save.disabled = session;
   textarea.value = session ? "Use /fallback inside Pi to edit current-session settings." : (state[scope] || []).join("\\n");
-  help.textContent = session ? "Session settings live in the open Pi session and cannot be changed from this standalone page." : (scope === "directory" ? "Current directory: ${cwd.replaceAll("\\", "\\\\").replaceAll("`", "\\`")}" : "Global settings apply wherever no narrower scope overrides them.");
+  help.textContent = session ? "Session settings live in the open Pi session and cannot be changed from this standalone page." : (scope === "directory" ? "Current directory: " + document.body.dataset.cwd : "Global settings apply wherever no narrower scope overrides them.");
 }
 async function load() {
   const response = await fetch("/api/config");

@@ -17,7 +17,7 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "files": ["src", "README.md", "LICENSE", "setup.bat", "launch.bat", "settings.bat", "tools"],
+  "files": ["src", "README.md", "LICENSE", "CHANGELOG.md", "setup.bat", "launch.bat", "settings.bat", "tools"],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test",

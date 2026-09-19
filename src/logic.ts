@@ -101,4 +101,76 @@ export function sameOptionalChain(
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+export interface ModelSearchItem {
+  provider: string;
+  id: string;
+  name?: string;
+}
+
+// Same search text as Pi's /model selector: provider first so
+// provider-prefixed queries rank before proxy-provider IDs.
+export function modelSearchText(item: ModelSearchItem): string {
+  const name = item.name ? ` ${item.name}` : "";
+  return `${item.provider} ${item.provider}/${item.id} ${item.provider} ${item.id}${name}`;
+}
+
+function subsequenceScore(query: string, text: string): number | undefined {
+  if (query.length === 0) return 0;
+  if (query.length > text.length) return undefined;
+  let queryIndex = 0;
+  let score = 0;
+  let lastMatch = -1;
+  let run = 0;
+  for (let i = 0; i < text.length && queryIndex < query.length; i++) {
+    if (text[i] !== query[queryIndex]) continue;
+    const boundary = i === 0 || /[\s\-_./:]/.test(text[i - 1]!);
+    if (lastMatch === i - 1) {
+      run++;
+      score -= run * 5;
+    } else {
+      run = 0;
+      if (lastMatch >= 0) score += (i - lastMatch - 1) * 2;
+    }
+    if (boundary) score -= 10;
+    score += i * 0.1;
+    lastMatch = i;
+    queryIndex++;
+  }
+  if (queryIndex < query.length) return undefined;
+  if (query === text) score -= 100;
+  return score;
+}
+
+// ponytail: mirrors pi-tui fuzzyFilter (per-token subsequence, all tokens must
+// match, best score first) without depending on the host Pi's pi-tui version;
+// the picker prefers the real fuzzyFilter when the host exports it.
+export function fuzzyFilterModels<T>(
+  items: T[],
+  query: string,
+  getText: (item: T) => string,
+): T[] {
+  const tokens = query
+    .trim()
+    .split(/[\s/]+/)
+    .filter((token) => token.length > 0);
+  if (tokens.length === 0) return items;
+  const scored: { item: T; score: number }[] = [];
+  for (const item of items) {
+    const text = getText(item).toLowerCase();
+    let total = 0;
+    let allMatch = true;
+    for (const token of tokens) {
+      const score = subsequenceScore(token.toLowerCase(), text);
+      if (score === undefined) {
+        allMatch = false;
+        break;
+      }
+      total += score;
+    }
+    if (allMatch) scored.push({ item, score: total });
+  }
+  scored.sort((a, b) => a.score - b.score);
+  return scored.map((entry) => entry.item);
+}
+
 // ponytail: the chain is intentionally linear; add weighted health scoring only if ordering needs to become adaptive.

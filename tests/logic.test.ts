@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import {
+  fuzzyFilterModels,
+  modelSearchText,
   normalizeChain,
   resolveEffectiveFallbacks,
   resolveScope,
@@ -77,4 +79,26 @@ test("compares optional chains", () => {
   expect(sameOptionalChain(undefined, undefined)).toBe(true);
   expect(sameOptionalChain([], undefined)).toBe(false);
   expect(sameOptionalChain(["a/b"], ["a/b"])).toBe(true);
+});
+
+test("model search text leads with provider like /model", () => {
+  expect(
+    modelSearchText({ provider: "openai", id: "gpt-4o", name: "GPT-4o" }),
+  ).toBe("openai openai/gpt-4o openai gpt-4o GPT-4o");
+});
+
+test("fuzzy filter matches fragments out of order like /model search", () => {
+  const items = [
+    "openai/gpt-4o",
+    "google/gemini-flash",
+    "anthropic/claude-opus",
+  ];
+  expect(fuzzyFilterModels(items, "gpto", (item) => item)).toEqual([
+    "openai/gpt-4o",
+  ]);
+  expect(fuzzyFilterModels(items, "google flash", (item) => item)).toEqual([
+    "google/gemini-flash",
+  ]);
+  expect(fuzzyFilterModels(items, "", (item) => item)).toEqual(items);
+  expect(fuzzyFilterModels(items, "zzz", (item) => item)).toEqual([]);
 });
