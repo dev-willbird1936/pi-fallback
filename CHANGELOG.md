@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Treat a missing current model as not already on the fallback, so typecheck passes under `strict`.
+
 ## 0.1.0
 
 Initial GitHub-ready release of `pi-ordered-fallback`.

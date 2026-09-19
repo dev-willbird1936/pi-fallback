@@ -90,6 +90,11 @@ export function classifyError(errorMessage: string | undefined): ErrorBucket {
   return "ignore";
 }
 
+function sessionModelRef(ctx: ExtensionContext): string | undefined {
+  const model = ctx.model;
+  return model ? `${model.provider}/${model.id}` : undefined;
+}
+
 function isCancellationError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
@@ -1187,8 +1192,7 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
     candidateRef: ModelRef,
     failure: PendingFailure,
   ): Promise<{ ok: boolean; error?: string }> {
-    const alreadyOnCandidate =
-      `${ctx.model.provider}/${ctx.model.id}` === candidateRef;
+    const alreadyOnCandidate = sessionModelRef(ctx) === candidateRef;
     if (alreadyOnCandidate) return { ok: true };
     // Prefer pi-switch when it is installed so the switch goes through the
     // same path as /switch. Always confirm with setModel so a premature
@@ -1198,7 +1202,7 @@ export default function piFallbackExtension(pi: ExtensionAPI): void {
         candidateRef,
         `pi-fallback: ${failure.failed} failed (${failure.bucket})`,
       );
-      if (`${ctx.model.provider}/${ctx.model.id}` === candidateRef) return { ok: true };
+      if (sessionModelRef(ctx) === candidateRef) return { ok: true };
       if (!via.ok) {
         ctx.ui.notify(
           `[${EXTENSION_NAME}] pi-switch could not activate ${candidateRef} (${via.error ?? "unknown error"}); switching directly.`,
