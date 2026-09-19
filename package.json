@@ -2,7 +2,10 @@
   "name": "pi-ordered-fallback",
   "version": "0.1.1",
   "description": "Pi extension with ordered model fallbacks and session, directory, and global scopes.",
-  "author": "dev-willbird1936",
+  "author": {
+    "name": "dev-willbird1936",
+    "url": "https://github.com/dev-willbird1936"
+  },
   "license": "MIT",
   "keywords": ["pi-package", "pi-extension", "fallback", "models"],
   "repository": {

@@ -1,8 +1,16 @@
 # Pi Ordered Fallback
 
+By [dev-willbird1936](https://github.com/dev-willbird1936).
+
 A Pi extension that tries fallback models in the exact order shown in its editor.
 
 ## Install
+
+From npm:
+
+```text
+pi install npm:pi-ordered-fallback
+```
 
 From GitHub:
 
