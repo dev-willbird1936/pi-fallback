@@ -1,47 +1,44 @@
-# Pi Ordered Fallback
+# pi-fallback-models
 
-By [dev-willbird1936](https://github.com/dev-willbird1936).
-
-A Pi extension that tries fallback models in the exact order shown in its editor.
+Tries your configured fallback models in order when the current Pi model encounters an eligible failure. Configure separate fallback chains for the current session, current directory, or all projects.
 
 ## Install
 
-From npm:
+Choose one installation source.
 
 ```text
-pi install npm:pi-ordered-fallback
-```
-
-From GitHub:
-
-```text
+pi install npm:pi-fallback-models
 pi install git:github.com/dev-willbird1936/pi-fallback
 ```
 
-For a local checkout on Windows:
+Restart Pi, or run `/reload` in an existing session.
 
-```bat
-pi install C:\path\to\pi-fallback
-```
+## What it does
 
-Restart Pi or run `/reload`, then use the interactive TUI command:
+Eligible failures: rate limits, transient provider or network errors, quota errors, unavailable models, and non-cancel stream aborts.
 
-```text
-/fallback
-```
+Not retried: context overflow and user abort.
 
-`/fallback-config` is an alias. `/fallback-status` prints the effective chain.
+When Pi or a goal extension is already retrying the failed model, this extension waits until the third consecutive failure. A goal continuation that recovers on its own never triggers a fallback.
+
+## Commands
+
+| Command | Effect |
+|---|---|
+| `/fallback` | Open the editor |
+| `/fallback-config` | Same editor |
+| `/fallback-status` | Print the effective chain |
 
 ## Editor
 
-- **Current** is Pi's active model and is changed with `/model`.
+- **Current** is Pi’s active model (`/model`).
 - **Fallback 1**, **Fallback 2**, and so on are tried from top to bottom.
-- Press **Enter** on a fallback row to choose from the same available model list Pi uses.
-- **Tab** switches between **Session**, **Current dir**, and **Global** settings. `S`, `D`, and `G` jump directly to a scope.
-- **Shift+Up/Down** reorders a fallback; **Backspace** clears one; **R** resets the selected scope to inheritance.
+- **Enter** on a fallback row opens Pi’s model list.
+- **Tab** switches **Session**, **Current dir**, and **Global**. `S`, `D`, and `G` jump to a scope.
+- **Shift+Up/Down** reorders. **Backspace** clears. **R** resets the selected scope to inheritance.
 - **Esc** saves and closes. `Ctrl+C` closes without saving.
 
-Scope precedence is:
+Scope precedence:
 
 ```text
 Current session → Current dir → Global
@@ -49,18 +46,24 @@ Current session → Current dir → Global
 
 A session or directory scope without an override inherits the next scope. An explicitly empty chain disables fallback at that scope.
 
-## Files
+## Requirements
 
-- Session settings are stored in the current Pi session as extension state.
-- Current-dir settings: `<cwd>/.pi/pi-fallback.json`
-- Global settings: `<Pi agent directory>/extensions/pi-fallback.json` (by default `~/.pi/agent`; honors `PI_CODING_AGENT_DIR`)
+- Node.js `>=22.19.0`
+- Pi Coding Agent
+- Models that Pi currently lists
 
-These files store model references only. This extension does not read or write provider API keys. A present but unreadable settings file is treated as an explicit empty chain (fallback disabled at that scope), not as inheritance.
+No API keys. Settings store model references only.
 
-Pi only reads current-dir settings after the project is trusted. Untrusted projects ignore `.pi/pi-fallback.json`.
+## Configuration
 
-Only models Pi currently exposes in its normal model list can be selected. Fallbacks trigger for rate limits, transient provider/network failures, quota errors, unavailable models, and non-cancel stream aborts. Context-overflow and user-abort errors are not retried.
+- Session: current Pi session extension state
+- Directory: `<cwd>/.pi/pi-fallback.json` (only after the project is trusted)
+- Global: `<Pi agent directory>/extensions/pi-fallback.json` (default `~/.pi/agent`)
 
-When Pi or a goal extension is already retrying the failed model, fallback holds until the 3rd consecutive failure, so recoverable hiccups never yank the model; a stuck model that keeps failing still falls back. A goal continuation that recovers on its own never triggers a fallback. When the pi-switch extension is installed, activation routes through its bus (`pi-switch:request`, deferred mode) and falls back to a direct switch if the bus request fails; otherwise fallback switches directly.
+An unreadable settings file is treated as an empty chain at that scope, not as inheritance.
 
-For persistent settings outside Pi, run the Windows-only `settings.bat [project-directory]`; it opens a local browser page with a Save button. Use `/fallback` in Pi when choosing models from Pi's model picker.
+If [pi-switch](https://github.com/dev-willbird1936/pi-switch) is installed, activation uses its bus (`pi-switch:request`) and falls back to a direct switch if the bus request fails.
+
+Windows: `settings.bat [project-directory]` opens a local page for directory and global JSON.
+
+By [dev-willbird1936](https://github.com/dev-willbird1936).

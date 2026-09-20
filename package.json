@@ -1,7 +1,7 @@
 {
-  "name": "pi-ordered-fallback",
+  "name": "pi-fallback-models",
   "version": "0.1.1",
-  "description": "Pi extension with ordered model fallbacks and session, directory, and global scopes.",
+  "description": "A Pi Coding Agent extension that tries configured fallback models in order after eligible failures, with session, directory, and global settings.",
   "author": {
     "name": "dev-willbird1936",
     "url": "https://github.com/dev-willbird1936"
@@ -20,7 +20,7 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "files": ["src", "README.md", "LICENSE", "CHANGELOG.md", "setup.bat", "launch.bat", "settings.bat", "tools"],
+  "files": ["src", "README.md", "LICENSE", "CHANGELOG.md", "settings.bat", "tools"],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test",
