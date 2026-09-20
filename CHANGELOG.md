@@ -4,7 +4,7 @@
 
 ### Changed
 
-- npm package name is `pi-fallback-models`. GitHub repository stays `pi-fallback`.
+- Package and GitHub repository are `pi-fallback-models`.
 
 ### Fixed
 

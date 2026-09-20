@@ -10,12 +10,12 @@
   "keywords": ["pi-package", "pi-extension", "fallback", "models"],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dev-willbird1936/pi-fallback.git"
+    "url": "git+https://github.com/dev-willbird1936/pi-fallback-models.git"
   },
   "bugs": {
-    "url": "https://github.com/dev-willbird1936/pi-fallback/issues"
+    "url": "https://github.com/dev-willbird1936/pi-fallback-models/issues"
   },
-  "homepage": "https://github.com/dev-willbird1936/pi-fallback#readme",
+  "homepage": "https://github.com/dev-willbird1936/pi-fallback-models#readme",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"

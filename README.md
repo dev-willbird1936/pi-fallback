@@ -8,7 +8,7 @@ Choose one installation source.
 
 ```text
 pi install npm:pi-fallback-models
-pi install git:github.com/dev-willbird1936/pi-fallback
+pi install git:github.com/dev-willbird1936/pi-fallback-models
 ```
 
 Restart Pi, or run `/reload` in an existing session.
